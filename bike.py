@@ -1,173 +1,157 @@
-import sklearn
 import pandas as pd
 import os
 import seaborn as sns
-from sklearn.base import TransformerMixin
 from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
 from numpy.core.defchararray import zfill
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.feature_selection import f_regression, SelectKBest, mutual_info_classif, mutual_info_regression
+from sklearn.feature_selection import f_regression, SelectKBest, mutual_info_regression
 from sklearn.pipeline import Pipeline
+
+from custom_transformers import FeatureDropper, RemoveDateTimes, FeatureSelector
+from utils import target_means_per_feature, target_std_per_feature, calc_correlations_with_target
 
 data_folder = "Bike-Sharing-Dataset"
 
-data_files = {'day': 'day.csv', 'hour': 'hour.csv'}
 date_col = 'dteday'
 hour_col = 'hr'
 full_date_col = 'fulldt'
 target_col = 'cnt'
 
+plot_plots = False
 
-def calc_target_corr(df, target_col):
-    """Calculate correlations of all numeric columns with target col, assumes target col is numerical"""
-    res = {}
-    for col in df.columns:
-        if col != target_col and df[col].dtype in ['float', 'float64', 'int', 'int64']:
-            res[col] = np.abs(df[target_col].corr(df[col]))
-    return res
+# Load data
+day = pd.read_csv(os.path.join(data_folder, 'day.csv'))
+hour = pd.read_csv(os.path.join(data_folder, 'hour.csv'))
+datasets = [day, hour]
 
-
-def target_stats_by_cols(df, target_col, feature_cols):
-    """Print averages of target per feature values"""
-    n = len(feature_cols)
-    plt.figure(1)
-    res = {}
-    for i in range(n):
-        plt.subplot(n, 1, i + 1)
-        curr_col = feature_cols[i]
-        mean = df.groupby(df[curr_col])[target_col].mean().sort_values()
-        mean.plot(subplots=True, kind='bar', title='Avg By %s' % curr_col, use_index=True)
-        std = mean.std()
-        res[curr_col] = {'std': std}
-    plt.show()
-    return res
-
-
-class FeatureDropper(TransformerMixin):
-
-    def __init__(self, cols):
-        self.cols = cols
-
-    def fit(self, X=None, y=None):
-        return self
-
-    def transform(self, X, y=None):
-        return X.drop(columns=self.cols)
-
-
-class FeatureSelector(TransformerMixin):
-
-    def __init__(self, cols):
-        self.cols = cols
-
-    def fit(self, X=None, y=None):
-        return self
-
-    def transform(self, X, y=None):
-        return X[self.cols]
-
-
-class RemoveDateTimes(TransformerMixin):
-
-    def fit(self, X=None, y=None):
-        return self
-
-    def transform(self, X, y=None):
-        return X.drop(columns=list(X.select_dtypes(include=['datetime64'])))
-
-
-print(os.getcwd())
-for name, file in data_files.items():
-    path = os.path.join(data_folder, file)
-    locals()[name + '_orig'] = pd.read_csv(path, index_col=0)
-
-for name in data_files:
-    locals()[name] = locals()[name + '_orig'].copy()
-
-locals_ = locals()
-datasets = [locals_[name] for name in data_files]
-
-#  EDA
+# EDA #
 for ds in datasets:
     ds[date_col] = pd.to_datetime(ds[date_col])
 
-# Examine differences between day and hour data
+# Examine differences between daily and hourly data
 hour.insert(loc=len(hour.columns), column=full_date_col,
             value=pd.to_datetime(
                 hour[date_col].astype(str) + '-' + hour[hour_col].astype(str).apply(zfill,
                                                                                     width=2),
                 format='%Y-%m-%d-%H'))
 
-print(day[target_col].sum())
-print(hour.resample('D', on=full_date_col)[target_col].sum().sum())
-# both show identical target values, so hourly data is a decomposed version of the daily data
+day_to_target = day.set_index(date_col)[target_col]
+aggregated_hour_to_target = hour.resample('D', on=full_date_col)[target_col].sum()
+print(all((day_to_target == aggregated_hour_to_target).values))
+# Both show identical target values, we conclude that hourly data is just a decomposed version of the daily data.
+# We keep on working with daily dataset only
+data = day
 
-# Find pearson coefficients between features and target
-corrs = calc_target_corr(day, target_col)
-print(corrs)
-# plt.bar(x=list(corrs.keys()), height=list(corrs.values()))
-# plt.show()
+# Find pearson coefficients between features and target - all features except dteday are numeric
+correlations = calc_correlations_with_target(data, target_col, show=plot_plots)
 
-# Registered and casual are irrelevant as they form target leakage. Will not be available in prediction time
-# temp and season are redundant due to month and atemp, which was found as slightly better correlating to target
-leaking_columns = ['registered', 'casual']
-redundant_columns = ['season', 'temp']
-irrelevant_columns = leaking_columns + redundant_columns
+if plot_plots:
+    sns.pairplot(data, kind='scatter')
+    plt.show()
+
+all_features = data.columns
+target_stds = target_std_per_feature(data, target_col, all_features, show=plot_plots)
+
+# 'registered', 'casual' are irrelevant as they cause target leakage - they won't be available in prediction time.
+# 'instant' is the record id which correlates well to target
+# (probably due to ever-increasing number of rents during time) but also won't be available in prediction time.
+leakage_columns = ['registered', 'casual', 'instant']
+
+redundant_columns = []
+
+calc_correlations_with_target(data, target_col='atemp', feature_cols=['temp'], show=plot_plots)
+# 'atemp' and 'temp' are almost perfectly correlated
+# 'atemp' was found slightly better correlating to target than 'temp' - so we discard 'temp'
+redundant_columns.append('temp')
+
+target_means_per_feature(data, target_col='season', feature_cols=['mnth'], show=plot_plots)
+# 'season' is redundant due to 'month' - 'month' is a more detailed version of 'season'.
+# 'season' coarsely separates December records to winter and spring,
+# while people are usually unaware of official season changes.
+redundant_columns.append('season')
+
+irrelevant_columns = leakage_columns + redundant_columns
 low_correlation_threshold = 0.1  # features with lower correlation are discarded
+
+# extract features that are neither causing leakage nor redundant, and present reasonable linear correlation to target
 relevant_corrs = dict(
-    filter(lambda x: x[0] not in irrelevant_columns and x[1] > low_correlation_threshold, corrs.items()))
+    filter(lambda x: x[0] not in irrelevant_columns and x[1] > low_correlation_threshold, correlations.items()))
 relevant_features = list(relevant_corrs.keys())
+num_relevant_features = len(relevant_features)
 
-sns.pairplot(day[relevant_features + [target_col]], kind='scatter')
-# plt.show()
-
-print(target_stats_by_cols(day, target_col, relevant_features))
-
-# splitting
-day_shuffled = day.sample(frac=1)
-X = day_shuffled.drop(columns=[target_col])
-y = day_shuffled[target_col]
+# Model Construction #
+# data splitting
+data_shuffled = data.sample(frac=1)
+X = data_shuffled.drop(columns=[target_col])
+y = data_shuffled[target_col]
 
 train_size = 0.85
-valid_size = 0.2  # fold size in cross-validation
+valid_size = 0.1  # 10-fold cross-validation
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1 - train_size, random_state=37)
+num_bins = 10
+bins = np.linspace(y.min(), y.max() + 1, num_bins)
+y_binned = np.digitize(y, bins, right=False)
+assert sum(y_binned == num_bins) == 0  # Last bin remains empty
+if plot_plots:
+    plt.hist(y_binned)
+    plt.show()
+
+# Perform stratified splitting to keep the train and test sets balanced
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1 - train_size, random_state=37, stratify=y_binned)
+print(y_train.mean(), y_test.mean())
 
 # Different feature selections, comparing my manually selected to auto selected using two methods
 my_fs = Pipeline(steps=[
     ('select_features', FeatureSelector(relevant_features))
 ])
-k1, k2 = 10, 10
+
 freg_fs = Pipeline(steps=[
-    ('select_features', SelectKBest(score_func=f_regression, k=k1))
+    ('select_features', SelectKBest(score_func=f_regression, k=num_relevant_features))
 ])
 
 mi_fs = Pipeline(steps=[
-    ('select_features', SelectKBest(score_func=mutual_info_regression, k=k2))
+    ('select_features', SelectKBest(score_func=mutual_info_regression, k=num_relevant_features))
 ])
 
-feature_selectors = [my_fs, freg_fs, mi_fs]
+random_fs = Pipeline(steps=[
+    ('select_features', FeatureSelector(n_random=num_relevant_features))
+])
+
+feature_selectors = [my_fs, freg_fs, mi_fs, random_fs]
 
 best_fs_pipeline = None
+my_fs_pipeline = None
 best_fs_score = -np.inf
+
+# Find the best pipeline with respect to other feature-selection strategies (f_regression, mutual_info_regression,
+# and random as a sanity check)
 for fs in feature_selectors:
     curr_pipeline = Pipeline(steps=[
-        ('remove_leakage', FeatureDropper(leaking_columns)),
+        ('remove_leakage', FeatureDropper(leakage_columns)),
         ('remove_datetime', RemoveDateTimes()),
         ('select_features', fs),
-        ('model', RandomForestRegressor(n_estimators=10))
+        ('model', RandomForestRegressor(n_estimators=100))
     ])
-    curr_score = cross_val_score(X=X_train, y=y_train, estimator=curr_pipeline, cv=int(1 / valid_size)).mean()
+    if fs == my_fs:
+        my_fs_pipeline = curr_pipeline
 
-    # try:  Problematic, the returned indices are for the preprocessed data
-    #     print("Chose %s" % str(X_train.columns[curr_pipeline.steps[2][1].steps[0][1].get_support(indices=True)]))
-    # except Exception as e:
-    #     print("Chose %s" % str(curr_pipeline.steps[2][1].steps[0][1].cols))
+    curr_score = cross_val_score(X=X_train, y=y_train, estimator=curr_pipeline, cv=int(1 / valid_size)).mean()
     print("Average cv score: %f" % curr_score)
     if curr_score > best_fs_score:
         best_fs_score = curr_score
         best_fs_pipeline = curr_pipeline
 
-baseline_model = best_fs_pipeline
+# Test Evaluation #
+# Fit the best CV model on the whole training data.
+# Should not change the model according to these results
+best_fs_pipeline.fit(X_train, y_train)
+y_pred = best_fs_pipeline.predict(X_test)
+print("Test score (MSE) for best fs %d" % mean_squared_error(y_test, y_pred))
+
+if best_fs_pipeline is not my_fs_pipeline:  # Avoid double train
+    my_fs_pipeline.fit(X_train, y_train)
+y_pred = my_fs_pipeline.predict(X_test)
+print("Test score (MSE) for my fs %d" % mean_squared_error(y_test, y_pred))
