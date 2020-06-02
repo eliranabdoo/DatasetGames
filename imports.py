@@ -82,6 +82,7 @@ data = data.astype(dtype={col: 'float' for col in numeric_features})  # numeric 
 #########
 ## EDA ##
 #########
+
 cols_with_missing_values = data.columns[data.isnull().any()]
 print("Cols with missing vals: %s" % str(cols_with_missing_values))
 # Missing data doesn't seem to have semantic meaning in any of the features with missing data (No MNAR)
@@ -126,9 +127,9 @@ del_listwise_data = data.dropna(subset=listwise_del_cols, how='any')
 del_listwise_data[['normalized-losses', 'price']] = del_listwise_data[['normalized-losses', 'price']] / \
                                                     del_listwise_data[['normalized-losses', 'price']].mean()
 a1 = del_listwise_data.boxplot(column=['price'], by='make', return_type='axes',
-                               boxprops=dict(linestyle='-', linewidth=4, color='blue'))
+                               boxprops=dict(linestyle='-', linewidth=4, color='b'))
 a2 = del_listwise_data.boxplot(column=['normalized-losses'], by='make', ax=a1,
-                               boxprops=dict(linestyle=':', linewidth=2, color='red'))
+                               boxprops=dict(linestyle=':', linewidth=2, color='b'))
 plt.xticks(rotation=45, ha="right")
 plt.show()
 
@@ -156,37 +157,49 @@ y = data[target_col]
 numeric_features.remove(target_col)
 
 # Split data to test and train, cross-validate on train (valid_size taken on train part)
-num_bins = 10
+num_bins = 5
 bins = np.linspace(y.min(), y.max() + 1, num_bins)
 y_binned = np.digitize(y, bins, right=False)
 
 train_size = 0.7
-valid_size = 0.1
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1 - train_size, random_state=37, stratify=y_binned)
-print(y_train.mean(), y_test.mean())
+valid_size = 0.05
+balance_diff = np.inf
+X_train, X_test, y_train, y_test = None, None, None, None
+while balance_diff > 0.1:
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1 - train_size,
+                                                        stratify=y_binned)
+    print(y_train.mean(), y_test.mean())
+    balance_diff = np.abs(y_train.mean() - y_test.mean())
+
+pipelines = {}
 
 # Pre-processing pipeline
-ohe = ColumnTransformer(
+ohe_partial = ColumnTransformer(
     transformers=[('onehot', OneHotEncoder(handle_unknown='ignore'), ohe_features)], remainder='passthrough')
 
-preprocessing_pipeline = Pipeline(steps=[
-    ('average-imp', ClassMeanImputer(predictors_map={'normalized-losses': 'make'})),
-    ('target-encoding', TargetEncoder(cols=target_encoding_features)),
-    ('one-hot-encoding', ohe),
-])
+ohe_full = ColumnTransformer(
+    transformers=[('onehot', OneHotEncoder(handle_unknown='ignore'), categorial_features)], remainder='passthrough')
 
-my_pipeline = Pipeline(steps=[
-    ('pre-process', preprocessing_pipeline),
-    ('model', RandomForestRegressor(n_estimators=100))
-])
+for idx, ohe_method in enumerate([ohe_partial, ohe_full]):
+    preprocessing_pipeline = Pipeline(steps=[
+        # chose max as the default value func due to the high price average of entries with missing values
+        ('average-imp', ClassMeanImputer(predictors_map={'normalized-losses': 'make'}, default_value_func=max)),
+        ('target-encoding', TargetEncoder(cols=target_encoding_features)),
+        ('one-hot-encoding', ohe_method),
+    ])
 
-pipelines = {'my_pipeline': my_pipeline}
+    my_pipeline = Pipeline(steps=[
+        ('pre-process', preprocessing_pipeline),
+        ('model', RandomForestRegressor(n_estimators=100))
+    ])
+
+    pipelines['my_pipeline_%d' % (idx + 1)] = my_pipeline
 
 # Simple pipelines with different imputation strategies
 imputation_strategies = ['mean', 'median', 'most_frequent']
-for st in imputation_strategies:
+for strategy in imputation_strategies:
     impute_pipeline = Pipeline(steps=[
-        ('impute', SimpleImputer(strategy=st, missing_values=np.nan))
+        ('impute', SimpleImputer(strategy=strategy, missing_values=np.nan))
     ])
 
     encode_pipeline = Pipeline(steps=[
@@ -197,11 +210,11 @@ for st in imputation_strategies:
         transformers=[('mean-imputer', impute_pipeline, numeric_features),
                       ('ohe', encode_pipeline, categorial_features)])
 
-    generic_pipeline = Pipeline(steps=[
+    pipeline = Pipeline(steps=[
         ('preprocess', impute_and_encode),
         ('model', RandomForestRegressor(n_estimators=100))
     ])
-    pipelines['%s_pipeline' % st] = generic_pipeline
+    pipelines['%s_pipeline' % strategy] = pipeline
 
 ######################
 ## Model Evaluation ##
@@ -217,6 +230,7 @@ for pl_name, pl in pipelines.items():
     if curr_score > best_score:
         best_pipeline_name = pl_name
         best_score = curr_score
+
 best_pipeline = pipelines[best_pipeline_name]
 
 ################

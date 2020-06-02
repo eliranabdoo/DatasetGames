@@ -64,56 +64,65 @@ class RemoveDateTimes(TransformerMixin):
 
 
 class ClassMeanImputer(TransformerMixin, BaseEstimator):
-    def __init__(self, predictors_map=None):
+    """ The Imputer recieves a @predictor_map that maps between numerical to categorical cols
+    For each pair of features <imputed_col, class_col> we impute each missing value in @imputed_col with the mean
+    value observed in it for all non-missing entries that hold the same class in the corresponding entry of @class_col
+    We build a map for each feature pair, all held under @imputer_maps.
+    """
+
+    def __init__(self, predictors_map=None, default_value_func=np.mean):
         self.predictors_map = predictors_map
-        self.source_allowed_types = ['object']
-        self.target_allowed_types = ['int', 'int64', 'float', 'float64']
+        self.class_allowed_types = ['object']
+        self.imputed_allowed_types = ['int', 'int64', 'float', 'float64']
         self.imputer_maps = {}
-        self.default_val_func = max
+        self.default_value_func = default_value_func
 
     def fit(self, X, y=None, predictors_map=None):
         self.predictors_map = predictors_map if predictors_map is not None else self.predictors_map
-        target_predictor_pairs = list(self.predictors_map.items())
-        source_cols = list(map(lambda x: x[1], target_predictor_pairs))
-        target_cols = list(map(lambda x: x[0], target_predictor_pairs))
-        source_allowed_cols = set(X.select_dtypes(include=self.source_allowed_types).columns)
-        target_allowed_cols = set(X.select_dtypes(include=self.target_allowed_types).columns)
+        features_pairs = list(self.predictors_map.items())
+        class_cols = list(map(lambda x: x[1], features_pairs))
+        imputed_cols = list(map(lambda x: x[0], features_pairs))
+        source_allowed_cols = set(X.select_dtypes(include=self.class_allowed_types).columns)
+        target_allowed_cols = set(X.select_dtypes(include=self.imputed_allowed_types).columns)
 
-        assert set(source_cols).issubset(source_allowed_cols)
-        assert set(target_cols).issubset(target_allowed_cols)
+        assert set(class_cols).issubset(source_allowed_cols)
+        assert set(imputed_cols).issubset(target_allowed_cols)
 
-        for target_col in target_cols:
+        for target_col in imputed_cols:
             impute_map = {}
 
-            source_col = self.predictors_map[target_col]
-            values = X[source_col].unique()
+            class_col = self.predictors_map[target_col]
+            values = X[class_col].unique()
             for v in values:
-                impute_map[v] = X.loc[X[target_col].notnull() & (X[source_col] == v), target_col].mean()
-            self.imputer_maps[target_col] = impute_map
+                impute_map[v] = X.loc[X[target_col].notnull() & (X[class_col] == v), target_col].mean()
 
-        for impute_map in self.imputer_maps.values():
-            default_val = self.default_val_func([val for val in impute_map.values() if val is not np.nan])
-            for v, avg in impute_map.items():
-                if avg is np.nan:
-                    impute_map[v] = default_val
+            default_fill_value = self.default_value_func([val for val in impute_map.values() if val is not np.nan])
+            for v in values:
+                if impute_map[v] is np.nan:
+                    impute_map[v] = default_fill_value
+
+            self.imputer_maps[target_col] = impute_map
 
         return self
 
     def transform(self, X, y=None):
         res = X.copy()
-        for target_col, source_col in self.predictors_map.items():
-            null_tcol_mask = X[target_col].isnull()
-            impute_map = self.imputer_maps[target_col]
+        for imputed_col, class_col in self.predictors_map.items():
+            null_tcol_mask = X[imputed_col].isnull()
+            impute_map = self.imputer_maps[imputed_col]
             for v in impute_map:
-                res.loc[null_tcol_mask & (X[source_col] == v), target_col] = impute_map[v]
+                res.loc[null_tcol_mask & (X[class_col] == v), imputed_col] = impute_map[v]
 
             # fill remaining nans with mean value
-            if any(res[target_col].isnull()):
-                res[target_col].fillna(np.mean(list(impute_map.values())), inplace=True)
+            if any(res[imputed_col].isnull()):
+                res[imputed_col].fillna(np.mean(list(impute_map.values())), inplace=True)
         return res
 
 
 class TargetEncoder(TransformerMixin, BaseEstimator):
+    """Target Encoder encodes the labels of each of the given features (@cols), by computing the mean target for each
+    of its categories.
+    """
     def __init__(self, cols=None):
         self.cols = cols
         self.source_allowed_types = ['object']
