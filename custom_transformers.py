@@ -20,18 +20,18 @@ class FeatureDropper(TransformerMixin):
         return X.drop(columns=self.cols)
 
 
-class ListwiseDelete(TransformerMixin):
-
-    def __init__(self, cols):
-        self.cols = cols
-
-    def fit(self, X=None, y=None):
-        rows_to_drop = X[X[self.cols].isnull().any(axis=1)].index
-        X.drop(rows_to_drop, axis='index', inplace=True), y.drop(rows_to_drop, axis='index', inplace=True)
-        return self
-
-    def transform(self, X, y=None):
-        return X
+# class ListwiseDelete(TransformerMixin):
+#
+#     def __init__(self, cols):
+#         self.cols = cols
+#
+#     def fit(self, X=None, y=None):
+#         rows_to_drop = X[X[self.cols].isnull().any(axis=1)].index
+#         X.drop(rows_to_drop, axis='index', inplace=True), y.drop(rows_to_drop, axis='index', inplace=True)
+#         return self
+#
+#     def transform(self, X, y=None):
+#         return X
 
 
 class FeatureSelector(TransformerMixin):

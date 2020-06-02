@@ -31,11 +31,13 @@ def calc_correlations_with_target(df, target_col, feature_cols=None):
         res[col] = np.abs(df[target_col].corr(df[col]))
 
     plt.bar(x=list(res.keys()), height=list(res.values()))
+    plt.xticks(rotation=45, ha="right")
+    plt.title("Correlations to target")
     return res
 
 
 @plotable
-def target_means_per_feature(df, target_col, feature_cols):
+def target_means_per_feature(df, target_col, feature_cols, sort=True):
     """Plot target means per value, for each of the given features"""
     n = len(feature_cols)
     res = {}
@@ -43,9 +45,12 @@ def target_means_per_feature(df, target_col, feature_cols):
     for i in range(n):
         plt.subplot(n, 1, i + 1)
         curr_col = feature_cols[i]
-        mean = df.groupby(df[curr_col])[target_col].mean().sort_values()
+        mean = df.groupby(df[curr_col])[target_col].mean()
+        if sort:
+            mean = mean.sort_values()
         res[curr_col] = mean
-        mean.plot(subplots=True, kind='bar', title='Means By %s' % curr_col, use_index=True)
+        mean.plot(subplots=True, kind='bar', use_index=True)
+    plt.subplots_adjust(hspace=0.8)
     return res
 
 

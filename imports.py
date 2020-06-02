@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.pipeline import Pipeline
 import re
 
-from custom_transformers import ClassMeanImputer, TargetEncoder, ListwiseDelete
+from custom_transformers import ClassMeanImputer, TargetEncoder
 
 data_path = "./Imports/imports-85.data"
 names_path = "./Imports/imports-85.names"
@@ -79,13 +79,15 @@ data = data.replace({missing_val: np.nan})  # Should be applied to new data
 data = data.dropna(axis=0, subset=[target_col])  # Shouldn't be applied to new data, target doesn't exist
 data = data.astype(dtype={col: 'float' for col in numeric_features})  # numeric features are loaded as strings
 
-# EDA #
+#########
+## EDA ##
+#########
 cols_with_missing_values = data.columns[data.isnull().any()]
 print("Cols with missing vals: %s" % str(cols_with_missing_values))
 # Missing data doesn't seem to have semantic meaning in any of the features with missing data (No MNAR)
 
 listwise_del_cols = []
-listwise_normed_avg_thresh = 0.1
+listwise_normed_avg_thresh = 0.01
 for col in cols_with_missing_values:
     target_avg_missing = data[target_col][data[col].isnull()].mean()
     target_avg_existing = data[target_col][~data[col].isnull()].mean()
@@ -94,15 +96,17 @@ for col in cols_with_missing_values:
     target_total_avg = data[target_col].mean()
 
     # Asses the difference in target average for missing and existing values, weigh by portion of missing values
-
-    normalized_average_difference = (target_avg_existing - target_avg_missing) / target_total_avg
+    normalized_average_difference = np.abs(target_avg_existing - target_avg_missing) / target_total_avg
     missing_to_existing_ratio = data[col].isnull().sum() / data[col].notnull().sum()
     missing_importance = normalized_average_difference * missing_to_existing_ratio
-    if np.abs(missing_importance) <= listwise_normed_avg_thresh:
+    if missing_importance <= listwise_normed_avg_thresh:
         listwise_del_cols.append(col)
 
-# 'normalized-losses' has a large gap between missing and existing entries target average
-# the pairs ('bore', 'stroke') and ('horsepower', 'peak-rpm') present the same averages, check if they are missing together
+print("Listwise del cols: %s" % ','.join(listwise_del_cols))
+
+# 'normalized-losses' has a large gap between missing and existing entries target average.
+# the pairs ('bore', 'stroke') and ('horsepower', 'peak-rpm') present the same averages -
+# check if they are missing together.
 # 'num-of-doors' also has very similar averages to ('horsepower', 'peak-rpm')
 
 print("%d different missing entries" % (sum(data['bore'].isnull() ^ data['stroke'].isnull())))
@@ -110,57 +114,53 @@ print("%d different missing entries" % sum(data['horsepower'].isnull() ^ data['p
 print("%d different missing entries" % sum(data['horsepower'].isnull() ^ data['num-of-doors'].isnull()))
 
 # the pairs ('bore', 'stroke') and ('horsepower', 'peak-rpm') are indeed missing together
-# both present low numbers of missing entries, so as 'num-of-doors' although it's not missing together with ('horsepower', 'peak-rpm')
-# check for common features values between missing groups
+# and both present low numbers of missing entries.
+# So as 'num-of-doors' although it's not missing together with ('horsepower', 'peak-rpm').
 
-for feature in ['bore', 'horsepower', 'num-of-doors']:
-    entries = data[data[feature].isnull()]
-    similar_features = [col for col in data.columns if
-                        col != feature and len(set([entry[col] for index, entry in entries.iterrows()])) == 1]
-    print("Inspected feature %s has identical feature values in missing entires under features: %s" % (
-        feature, str(similar_features)))
+# All features expect normalized-losses present low normed avg difference
+# normalized-losses present extremely high bias in avg price.
+# Listwise delete all except that one, and look for correlation with some other feature,
+# to understand whether it is an MAR
 
-"""All features expect normalized-losses present low normed avg difference
-(horsepower,peak-rpm) and (bore,stroke) are missing together, most likely they are MCAR
-normalized-losses present extremely high bias in avg price.
-Listwise delete all except that one, and look for correlation with some other feature,
-to understand whether it is an MAR"""
-
-del_listwise = data.dropna(subset=listwise_del_cols, how='any')
-del_listwise[['normalized-losses', 'price']] = del_listwise[['normalized-losses', 'price']] / del_listwise[
-    ['normalized-losses', 'price']].mean()
-a1 = del_listwise.boxplot(column=['price'], by='make', return_type='axes',
-                          boxprops=dict(linestyle='-', linewidth=4, color='b'))
-a2 = del_listwise.boxplot(column=['normalized-losses'], by='make', ax=a1,
-                          boxprops=dict(linestyle='-', linewidth=4, color='r'))
+del_listwise_data = data.dropna(subset=listwise_del_cols, how='any')
+del_listwise_data[['normalized-losses', 'price']] = del_listwise_data[['normalized-losses', 'price']] / \
+                                                    del_listwise_data[['normalized-losses', 'price']].mean()
+a1 = del_listwise_data.boxplot(column=['price'], by='make', return_type='axes',
+                               boxprops=dict(linestyle='-', linewidth=4, color='blue'))
+a2 = del_listwise_data.boxplot(column=['normalized-losses'], by='make', ax=a1,
+                               boxprops=dict(linestyle=':', linewidth=2, color='red'))
+plt.xticks(rotation=45, ha="right")
 plt.show()
 
-"""Losses are vague for expensive brands ('make' feature), and pretty solid on others.
-Perform mean imputation with respect to the firm only
-For firms with no mean losses at all, just impute with the maximal average loss,
-as we assume missing losses are for expensive makers"""
+# Losses are vague for expensive brands ('make' feature), and pretty solid on others.
+# Perform mean imputation with respect to the firm only
+# For firms with no mean losses at all, just impute with the maximal average loss,
+# as we assume missing losses are for expensive makers
 
 # Set one-hot label encoding and target encoding features, depending on unique threshold
-nuniques = del_listwise.nunique()
-ohe_unique_thresh = 5
+nuniques = del_listwise_data.nunique()
+ohe_unique_thresh = 5  # categories threshold for one-hot-encoding
 categorial_features = [feature for feature in data.columns if getattr(data, feature).dtype == 'object']
 ohe_features = [feature for feature in categorial_features if nuniques[feature] <= ohe_unique_thresh]
 target_encoding_features = list(filter(lambda x: x not in ohe_features, categorial_features))
 
-# Model Construction #
-# Shuffle the data and split to X,y
+########################
+## Model Construction ##
+########################
+
+# Shuffle the data
 data = data.sample(frac=1)
+data = data.dropna(subset=listwise_del_cols, how='any')
 X = data.drop(columns=[target_col])
 y = data[target_col]
 numeric_features.remove(target_col)
-ListwiseDelete(cols=listwise_del_cols).fit_transform(X, y)
 
 # Split data to test and train, cross-validate on train (valid_size taken on train part)
 num_bins = 10
 bins = np.linspace(y.min(), y.max() + 1, num_bins)
 y_binned = np.digitize(y, bins, right=False)
 
-train_size = 0.85
+train_size = 0.7
 valid_size = 0.1
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1 - train_size, random_state=37, stratify=y_binned)
 print(y_train.mean(), y_test.mean())
@@ -203,6 +203,10 @@ for st in imputation_strategies:
     ])
     pipelines['%s_pipeline' % st] = generic_pipeline
 
+######################
+## Model Evaluation ##
+######################
+
 best_pipeline_name = None
 best_score = -np.inf
 
@@ -215,12 +219,18 @@ for pl_name, pl in pipelines.items():
         best_score = curr_score
 best_pipeline = pipelines[best_pipeline_name]
 
-# Test Evaluation #
+################
+## Test Score ##
+################
+
+# Get test score for best model
 best_pipeline.fit(X_train, y_train)
 y_pred = best_pipeline.predict(X_test)
-print("Test score (MSE) for best pipeline: %d" % mean_squared_error(y_test, y_pred))
+print("Test score (MSE) for best pipeline %s: %d" % (best_pipeline_name, mean_squared_error(y_test, y_pred)))
 
-if best_pipeline is not my_pipeline:  # Avoid double train
-    my_pipeline.fit(X_train, y_train)
-y_pred = my_pipeline.predict(X_test)
-print("Test score (MSE) for my_pipeline %d" % mean_squared_error(y_test, y_pred))
+# Let's also see the MSE for all other models
+for pl_name, pl in pipelines.items():
+    if pl_name != best_pipeline_name:  # Avoid double train
+        pl.fit(X_train, y_train)
+        y_pred = pl.predict(X_test)
+        print("Test score (MSE) for %s: %d" % (pl_name, mean_squared_error(y_test, y_pred)))
