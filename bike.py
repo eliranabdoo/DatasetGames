@@ -20,7 +20,7 @@ hour_col = "hr"
 full_date_col = "fulldt"
 target_col = "cnt"
 
-plot_plots = False
+PLOTS = False
 
 # Load data
 day = pd.read_csv(os.path.join(data_folder, "day.csv"))
@@ -51,7 +51,7 @@ data = hour
 
 # Find pearson coefficients between features and target - all features except dteday are of numeric datatype, although
 # some are categorical encoded in a semantic way (i.e. months are encoded 1 to 12)
-correlations = calc_correlations_with_target(data, target_col, show=plot_plots)
+correlations = calc_correlations_with_target(data, target_col, show=PLOTS)
 
 # "registered", "casual" are irrelevant as they cause target leakage - they won"t be available in prediction time.
 # "instant" is the record id which correlates well to target
@@ -62,18 +62,18 @@ del correlations["casual"]
 
 redundant_columns = []
 top_5 = list(map(lambda x: x[0], sorted(tuple(correlations.items()), key=lambda x: x[1])[-5:]))
-if plot_plots:
+if PLOTS:
     sns.pairplot(data[top_5], kind="scatter")
     plt.show()
 print(calc_correlations_with_target(data, target_col="atemp", feature_cols=["temp"], show=False)["temp"])
 # "atemp" and "temp" are almost perfectly correlated
 redundant_columns.append("temp")
 
-weather_target_std = target_std_per_feature(data, target_col, ["weathersit", "season"], show=plot_plots)
+weather_target_std = target_std_per_feature(data, target_col, ["weathersit", "season"], show=PLOTS)
 redundant_columns.append("season")
 redundant_columns.append("windspeed")
 
-target_means_per_feature(data, target_col, feature_cols=["hr", "mnth", "yr"], sort=False, show=plot_plots)
+target_means_per_feature(data, target_col, feature_cols=["hr", "mnth", "yr"], sort=False, show=PLOTS)
 
 redundant_columns.append("yr")
 
@@ -102,7 +102,7 @@ num_bins = 10
 bins = np.linspace(y.min(), y.max() + 1, num_bins)
 y_binned = np.digitize(y, bins, right=False)
 assert sum(y_binned == num_bins) == 0  # Last bin remains empty
-if plot_plots:
+if PLOTS:
     plt.hist(y_binned)
     plt.show()
 

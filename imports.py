@@ -20,6 +20,8 @@ target_col = 'price'
 attribute_match_regex = "\d{1,2}\. (.+?):"
 missing_val = '?'
 
+PLOTS = False
+
 
 def get_features_from_names(path):
     """
@@ -131,7 +133,8 @@ a1 = del_listwise_data.boxplot(column=['price'], by='make', return_type='axes',
 a2 = del_listwise_data.boxplot(column=['normalized-losses'], by='make', ax=a1,
                                boxprops=dict(linestyle=':', linewidth=2, color='b'))
 plt.xticks(rotation=45, ha="right")
-plt.show()
+if PLOTS:
+    plt.show()
 
 # Losses are vague for expensive brands ('make' feature), and pretty solid on others.
 # Perform mean imputation with respect to the firm only
